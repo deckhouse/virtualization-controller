@@ -3,31 +3,36 @@ package controller
 import (
 	"context"
 	"fmt"
-	"github.com/deckhouse/virtualization-controller/pkg/sdk/framework/helper"
-	"github.com/deckhouse/virtualization-controller/pkg/util"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/uuid"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	virtv2 "github.com/deckhouse/virtualization-controller/api/v2alpha1"
-	"github.com/deckhouse/virtualization-controller/pkg/sdk/framework/two_phase_reconciler"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	virtv2 "github.com/deckhouse/virtualization-controller/api/v2alpha1"
+	"github.com/deckhouse/virtualization-controller/pkg/sdk/framework/helper"
+	"github.com/deckhouse/virtualization-controller/pkg/sdk/framework/two_phase_reconciler"
+	"github.com/deckhouse/virtualization-controller/pkg/util"
 )
 
 type VMDReconciler struct{}
 
+// SetupController
+//
+// TODO replace arg names with _ or use them in code and remove nolint comment
+//
+//nolint:revive
 func (r *VMDReconciler) SetupController(ctx context.Context, mgr manager.Manager, ctr controller.Controller) error {
 	if err := ctr.Watch(&source.Kind{Type: &virtv2.VirtualMachineDisk{}}, &handler.EnqueueRequestForObject{},
 		predicate.Funcs{
@@ -38,6 +43,8 @@ func (r *VMDReconciler) SetupController(ctx context.Context, mgr manager.Manager
 	); err != nil {
 		return err
 	}
+
+	//nolint:revive
 	if err := ctr.Watch(&source.Kind{Type: &cdiv1.DataVolume{}}, &handler.EnqueueRequestForOwner{
 		OwnerType:    &virtv2.VirtualMachineDisk{},
 		IsController: true,
@@ -112,21 +119,21 @@ func (r *VMDReconciler) Sync(ctx context.Context, req reconcile.Request, state *
 	if state.DV != nil {
 		if controllerutil.AddFinalizer(state.DV, virtv2.FinalizerDVProtection) {
 			if err := opts.Client.Update(ctx, state.DV); err != nil {
-				return fmt.Errorf("error setting finalizer on a DV %q: %w", state.DV.Name)
+				return fmt.Errorf("error setting finalizer on a DV %q: %w", state.DV.Name, err)
 			}
 		}
 	}
 	if state.PVC != nil {
 		if controllerutil.AddFinalizer(state.PVC, virtv2.FinalizerPVCProtection) {
 			if err := opts.Client.Update(ctx, state.PVC); err != nil {
-				return fmt.Errorf("error setting finalizer on a PVC %q: %w", state.PVC.Name)
+				return fmt.Errorf("error setting finalizer on a PVC %q: %w", state.PVC.Name, err)
 			}
 		}
 	}
 	if state.PV != nil {
 		if controllerutil.AddFinalizer(state.PV, virtv2.FinalizerPVProtection) {
 			if err := opts.Client.Update(ctx, state.PV); err != nil {
-				return fmt.Errorf("error setting finalizer on a PV %q: %w", state.PV.Name)
+				return fmt.Errorf("error setting finalizer on a PV %q: %w", state.PV.Name, err)
 			}
 		}
 	}
@@ -134,6 +141,11 @@ func (r *VMDReconciler) Sync(ctx context.Context, req reconcile.Request, state *
 	return nil
 }
 
+// UpdateStatus
+//
+// TODO replace arg names with _ or use them in code and remove nolint comment
+//
+//nolint:revive
 func (r *VMDReconciler) UpdateStatus(ctx context.Context, req reconcile.Request, state *VMDReconcilerState, opts two_phase_reconciler.ReconcilerOptions) error {
 	opts.Log.V(2).Info("Update Status", "pvcname", state.VMD.Current().Annotations[AnnVMDDataVolume])
 

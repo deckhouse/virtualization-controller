@@ -263,18 +263,15 @@ tasks:
     desc: "Run golangci-lint"
     deps:
       - _ensure:golangci-lint
-    vars:
-      GOLANGCILINT_PATH: '{{ default "golangci-lint" .GOLANGCILINT_PATH }}'
     cmds:
       - |
-        echo {{ .GOLANGCILINT_PATH }} run --sort-results
+        golangci-lint run --sort-results
 
   ci:lint:
     desc: "Run linters in CI"
     cmds:
-      - task: lint:go
-        vars:
-          GOLANGCILINT_PATH: "./golangci-lint"
+      - |
+        ./golangci-lint run --sort-results
 
   _ensure:k8s-codegen-mod:
     desc: "Ensure k8s.io/codegen module is present"
@@ -344,4 +341,5 @@ tasks:
         echo -e >&2 "Please install golangci-lint https://golangci-lint.run/usage/install/"
         exit 1
     status:
-      - [ -f ./golangci-lint ] || which golangci-lint
+      - |
+        [ -f ./golangci-lint ] || which golangci-lint

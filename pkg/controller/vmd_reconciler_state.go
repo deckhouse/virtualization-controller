@@ -3,8 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
-	virtv2 "github.com/deckhouse/virtualization-controller/api/v2alpha1"
-	"github.com/deckhouse/virtualization-controller/pkg/sdk/framework/helper"
+
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -12,6 +11,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	virtv2 "github.com/deckhouse/virtualization-controller/api/v2alpha1"
+	"github.com/deckhouse/virtualization-controller/pkg/sdk/framework/helper"
 )
 
 type VMDReconcilerState struct {
@@ -34,6 +36,11 @@ func NewVMDReconcilerState(name types.NamespacedName, log logr.Logger, client cl
 	}
 }
 
+// ApplySync
+//
+// TODO replace arg names with _ or use them in code and remove nolint comment
+//
+//nolint:revive
 func (state *VMDReconcilerState) ApplySync(ctx context.Context, log logr.Logger) error {
 	if err := state.VMD.UpdateMeta(ctx); err != nil {
 		return fmt.Errorf("unable to update VMD %q meta: %w", state.VMD.Name(), err)
@@ -41,6 +48,11 @@ func (state *VMDReconcilerState) ApplySync(ctx context.Context, log logr.Logger)
 	return nil
 }
 
+// ApplyUpdateStatus
+//
+// TODO replace arg names with _ or use them in code and remove nolint comment
+//
+//nolint:revive
 func (state *VMDReconcilerState) ApplyUpdateStatus(ctx context.Context, log logr.Logger) error {
 	return state.VMD.UpdateStatus(ctx)
 }
@@ -100,6 +112,7 @@ func (state *VMDReconcilerState) Reload(ctx context.Context, req reconcile.Reque
 			if state.PV == nil {
 				return fmt.Errorf("no PV %q found: expected existing PV for PVC %q in phase %q", pvName, state.PVC.Name, state.PVC.Status.Phase)
 			}
+		default:
 		}
 	}
 
