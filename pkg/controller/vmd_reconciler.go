@@ -28,12 +28,7 @@ import (
 
 type VMDReconciler struct{}
 
-// SetupController
-//
-// TODO replace arg names with _ or use them in code and remove nolint comment
-//
-//nolint:revive
-func (r *VMDReconciler) SetupController(ctx context.Context, mgr manager.Manager, ctr controller.Controller) error {
+func (r *VMDReconciler) SetupController(_ context.Context, _ manager.Manager, ctr controller.Controller) error {
 	if err := ctr.Watch(&source.Kind{Type: &virtv2.VirtualMachineDisk{}}, &handler.EnqueueRequestForObject{},
 		predicate.Funcs{
 			CreateFunc: func(e event.CreateEvent) bool { return true },
@@ -41,15 +36,14 @@ func (r *VMDReconciler) SetupController(ctx context.Context, mgr manager.Manager
 			UpdateFunc: func(e event.UpdateEvent) bool { return true },
 		},
 	); err != nil {
-		return err
+		return fmt.Errorf("error setting watch on VMD: %w", err)
 	}
 
-	//nolint:revive
 	if err := ctr.Watch(&source.Kind{Type: &cdiv1.DataVolume{}}, &handler.EnqueueRequestForOwner{
 		OwnerType:    &virtv2.VirtualMachineDisk{},
 		IsController: true,
 	}); err != nil {
-		return err
+		return fmt.Errorf("error setting watch on DV: %w", err)
 	}
 
 	return nil
@@ -141,12 +135,7 @@ func (r *VMDReconciler) Sync(ctx context.Context, req reconcile.Request, state *
 	return nil
 }
 
-// UpdateStatus
-//
-// TODO replace arg names with _ or use them in code and remove nolint comment
-//
-//nolint:revive
-func (r *VMDReconciler) UpdateStatus(ctx context.Context, req reconcile.Request, state *VMDReconcilerState, opts two_phase_reconciler.ReconcilerOptions) error {
+func (r *VMDReconciler) UpdateStatus(_ context.Context, _ reconcile.Request, state *VMDReconcilerState, opts two_phase_reconciler.ReconcilerOptions) error {
 	opts.Log.V(2).Info("Update Status", "pvcname", state.VMD.Current().Annotations[AnnVMDDataVolume])
 
 	// Change previous state to new

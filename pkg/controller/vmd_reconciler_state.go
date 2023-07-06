@@ -36,24 +36,14 @@ func NewVMDReconcilerState(name types.NamespacedName, log logr.Logger, client cl
 	}
 }
 
-// ApplySync
-//
-// TODO replace arg names with _ or use them in code and remove nolint comment
-//
-//nolint:revive
-func (state *VMDReconcilerState) ApplySync(ctx context.Context, log logr.Logger) error {
+func (state *VMDReconcilerState) ApplySync(ctx context.Context, _ logr.Logger) error {
 	if err := state.VMD.UpdateMeta(ctx); err != nil {
 		return fmt.Errorf("unable to update VMD %q meta: %w", state.VMD.Name(), err)
 	}
 	return nil
 }
 
-// ApplyUpdateStatus
-//
-// TODO replace arg names with _ or use them in code and remove nolint comment
-//
-//nolint:revive
-func (state *VMDReconcilerState) ApplyUpdateStatus(ctx context.Context, log logr.Logger) error {
+func (state *VMDReconcilerState) ApplyUpdateStatus(ctx context.Context, _ logr.Logger) error {
 	return state.VMD.UpdateStatus(ctx)
 }
 
