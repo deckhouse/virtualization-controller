@@ -10,9 +10,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/uuid"
 	virtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -21,8 +21,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	virtv2 "github.com/deckhouse/virtualization-controller/api/v2alpha1"
-	"github.com/deckhouse/virtualization-controller/pkg/sdk/framework/helper"
 	"github.com/deckhouse/virtualization-controller/pkg/sdk/framework/two_phase_reconciler"
+	"github.com/deckhouse/virtualization-controller/pkg/util"
 )
 
 type VMReconciler struct{}
@@ -38,7 +38,7 @@ func (r *VMReconciler) SetupController(_ context.Context, _ manager.Manager, ctr
 		return fmt.Errorf("error setting watch on VM: %w", err)
 	}
 
-	if err := ctr.Watch(&source.Kind{Type: &virtv1.VirtualMachineInstance{}}, &handler.EnqueueRequestForOwner{
+	if err := ctr.Watch(&source.Kind{Type: &virtv1.VirtualMachine{}}, &handler.EnqueueRequestForOwner{
 		OwnerType:    &virtv2.VirtualMachine{},
 		IsController: true,
 	}); err != nil {
@@ -48,102 +48,174 @@ func (r *VMReconciler) SetupController(_ context.Context, _ manager.Manager, ctr
 	return nil
 }
 
-func (r *VMReconciler) Sync(ctx context.Context, req reconcile.Request, state *VMReconcilerState, opts two_phase_reconciler.ReconcilerOptions) error {
+func (r *VMReconciler) Sync(ctx context.Context, _ reconcile.Request, state *VMReconcilerState, opts two_phase_reconciler.ReconcilerOptions) error {
 	if !state.VM.Current().ObjectMeta.DeletionTimestamp.IsZero() {
-		// FIXME(VM): implement deletion case
+		// The object is being deleted
+		if controllerutil.ContainsFinalizer(state.VM.Current(), virtv2.FinalizerVMCleanup) {
+			// Our finalizer is present, so lets cleanup DV, PVC & PV dependencies
+			if state.KVVM != nil {
+				if controllerutil.RemoveFinalizer(state.KVVM, virtv2.FinalizerKVVMProtection) {
+					if err := opts.Client.Update(ctx, state.KVVM); err != nil {
+						return fmt.Errorf("unable to remove KubeVirt VM %q finalizer %q: %w", state.KVVM.Name, virtv2.FinalizerKVVMProtection, err)
+					}
+				}
+			}
+			if state.KVVMI != nil {
+				if controllerutil.RemoveFinalizer(state.KVVMI, virtv2.FinalizerKVVMIProtection) {
+					if err := opts.Client.Update(ctx, state.KVVMI); err != nil {
+						return fmt.Errorf("unable to remove KubeVirt VMI %q finalizer %q: %w", state.KVVMI.Name, virtv2.FinalizerKVVMIProtection, err)
+					}
+				}
+			}
+			controllerutil.RemoveFinalizer(state.VM.Changed(), virtv2.FinalizerVMCleanup)
+		}
+
+		// Stop reconciliation as the item is being deleted
 		return nil
 	}
 
-	if vmiName, hasKey := state.VM.Current().Annotations[AnnVMVirtualMachineInstance]; !hasKey {
-		if state.VM.Changed().Annotations == nil {
-			state.VM.Changed().Annotations = make(map[string]string)
-		}
-		state.VM.Changed().Annotations[AnnVMVirtualMachineInstance] = fmt.Sprintf("virtual-machine-instance-%s", uuid.NewUUID())
-		opts.Log.Info("Generated DV name", "name", state.VM.Changed().Annotations[AnnVMVirtualMachineInstance])
-	} else {
-		name := types.NamespacedName{Name: vmiName, Namespace: req.Namespace}
+	// Set finalizer atomically
+	if controllerutil.AddFinalizer(state.VM.Changed(), virtv2.FinalizerVMCleanup) {
+		state.SetReconcilerResult(&reconcile.Result{Requeue: true})
+		return nil
+	}
 
-		vmi, err := helper.FetchObject(ctx, name, opts.Client, &virtv1.VirtualMachineInstance{})
-		if err != nil {
-			return fmt.Errorf("unable to get VMI %q: %w", name, err)
-		}
+	if state.KVVM == nil {
+		kvvmName := state.VM.Name()
 
-		if vmi == nil {
-			// Check all VMD are loaded
-			for _, bd := range state.VM.Current().Spec.BlockDevices {
-				switch bd.Type {
-				case virtv2.ImageDevice:
-					panic("NOT IMPLEMENTED")
+		// Check all images and disks are ready to use
+		for _, bd := range state.VM.Current().Spec.BlockDevices {
+			switch bd.Type {
+			case virtv2.ImageDevice:
+				panic("NOT IMPLEMENTED")
 
-				case virtv2.DiskDevice:
-					if vmd, hasKey := state.VMDByName[bd.VirtualMachineDisk.Name]; hasKey {
-						opts.Log.Info("Check VM ready", "VMD", vmd, "Status", vmd.Status)
-						if vmd.Status.Phase != virtv2.DiskReady {
-							opts.Log.Info("Waiting for VMD to become ready", "VMD", bd.VirtualMachineDisk.Name)
-							state.SetReconcilerResult(&reconcile.Result{RequeueAfter: 2 * time.Second})
-							return nil
-						}
-					} else {
-						// TODO(VM): Maybe set waiting for BlockDevices annotation
-						opts.Log.Info("Waiting for VMD to become available", "VMD", bd.VirtualMachineDisk.Name)
+			case virtv2.DiskDevice:
+				if vmd, hasKey := state.VMDByName[bd.VirtualMachineDisk.Name]; hasKey {
+					opts.Log.Info("Check VMD ready", "VMD", vmd, "Status", vmd.Status)
+					if vmd.Status.Phase != virtv2.DiskReady {
+						opts.Log.Info("Waiting for VMD to become ready", "VMD Name", bd.VirtualMachineDisk.Name)
 						state.SetReconcilerResult(&reconcile.Result{RequeueAfter: 2 * time.Second})
 						return nil
 					}
-
-				default:
-					panic(fmt.Sprintf("unknown block device type %q", bd.Type))
+				} else {
+					opts.Log.Info("Waiting for VMD to become available", "VMD", bd.VirtualMachineDisk.Name)
+					state.SetReconcilerResult(&reconcile.Result{RequeueAfter: 2 * time.Second})
+					return nil
 				}
-			}
 
-			vmi = NewVMIFromVirtualMachine(name, state.VM.Current(), state.VMDByName)
-			if err := opts.Client.Create(ctx, vmi); err != nil {
-				return fmt.Errorf("unable to create VMI %q: %w", vmi.Name, err)
+			default:
+				panic(fmt.Sprintf("unknown block device type %q", bd.Type))
 			}
-			opts.Log.Info("Created new VMI", "name", vmi.Name, "vmi", vmi)
 		}
 
-		state.VMI = vmi
+		kvvm := NewKVVMFromVirtualMachine(kvvmName, state.VM.Current(), state.VMDByName)
+		if err := opts.Client.Create(ctx, kvvm); err != nil {
+			return fmt.Errorf("unable to create KubeVirt VM %q: %w", kvvmName, err)
+		}
+		state.KVVM = kvvm
+
+		opts.Log.Info("Created new KubeVirt VM", "name", kvvmName, "kvvm", state.KVVM)
+	}
+
+	// Add KubeVirt VM and VMI finalizers
+	if state.KVVM != nil {
+		// Ensure KubeVirt VM finalizer is set in case VM was created manually (take ownership of already existing object)
+		if controllerutil.AddFinalizer(state.KVVM, virtv2.FinalizerKVVMProtection) {
+			if err := opts.Client.Update(ctx, state.KVVM); err != nil {
+				return fmt.Errorf("error setting finalizer on a KubeVirt VM %q: %w", state.KVVM.Name, err)
+			}
+		}
+	}
+	if state.KVVMI != nil {
+		if controllerutil.AddFinalizer(state.KVVMI, virtv2.FinalizerKVVMIProtection) {
+			if err := opts.Client.Update(ctx, state.KVVMI); err != nil {
+				return fmt.Errorf("error setting finalizer on a KubeVirt VMI %q: %w", state.KVVMI.Name, err)
+			}
+		}
 	}
 
 	return nil
 }
 
-func (r *VMReconciler) UpdateStatus(ctx context.Context, req reconcile.Request, state *VMReconcilerState, opts two_phase_reconciler.ReconcilerOptions) error {
+func (r *VMReconciler) UpdateStatus(_ context.Context, _ reconcile.Request, state *VMReconcilerState, opts two_phase_reconciler.ReconcilerOptions) error {
 	opts.Log.Info("VMReconciler.UpdateStatus")
 
-	_ = ctx
-	_ = req
-	_ = state
+	// Change previous state to new
+	switch state.VM.Current().Status.Phase {
+	case "":
+		state.VM.Changed().Status.Phase = virtv2.MachinePending
+		state.SetReconcilerResult(&reconcile.Result{Requeue: true})
+	case virtv2.MachinePending:
+		if state.KVVMI != nil {
+			switch state.KVVMI.Status.Phase {
+			case virtv1.Running:
+				state.VM.Changed().Status.Phase = virtv2.MachineScheduling
+				state.SetReconcilerResult(&reconcile.Result{Requeue: true})
+			case virtv1.Scheduled, virtv1.Scheduling:
+				state.VM.Changed().Status.Phase = virtv2.MachineScheduling
+			}
+		}
+
+	case virtv2.MachineScheduling:
+		if state.KVVMI.Status.Phase == virtv1.Running {
+			state.VM.Changed().Status.Phase = virtv2.MachineRunning
+		}
+
+	case virtv2.MachineRunning:
+	case virtv2.MachineTerminating:
+	case virtv2.MachineStopped:
+	case virtv2.MachineFailed:
+	}
+
+	// Set fields after phase changed
+	switch state.VM.Changed().Status.Phase {
+	case virtv2.MachinePending:
+	case virtv2.MachineScheduling:
+	case virtv2.MachineRunning:
+	case virtv2.MachineTerminating:
+	case virtv2.MachineStopped:
+	case virtv2.MachineFailed:
+	default:
+		panic(fmt.Sprintf("unexpected phase %q", state.VM.Changed().Status.Phase))
+	}
 
 	return nil
 }
 
-func NewVMIFromVirtualMachine(name types.NamespacedName, vm *virtv2.VirtualMachine, vmdByName map[string]*virtv2.VirtualMachineDisk) *virtv1.VirtualMachineInstance {
+func NewKVVMFromVirtualMachine(name types.NamespacedName, vm *virtv2.VirtualMachine, vmdByName map[string]*virtv2.VirtualMachineDisk) *virtv1.VirtualMachine {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 
-	res := &virtv1.VirtualMachineInstance{
+	res := &virtv1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   name.Namespace,
 			Name:        name.Name,
 			Labels:      labels,
 			Annotations: annotations,
 		},
-		Spec: virtv1.VirtualMachineInstanceSpec{
-			Domain: virtv1.DomainSpec{
-				Resources: virtv1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						// FIXME: support coreFraction: req = vm.Spec.CPU.Cores * coreFraction
-						corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", vm.Spec.CPU.Cores)),
-						corev1.ResourceMemory: resource.MustParse(vm.Spec.Memory.Size),
+		Spec: virtv1.VirtualMachineSpec{
+			// TODO(VM): Implement RunPolicy instead
+			Running: util.GetPointer(true),
+			// RunStrategy: util.GetPointer(virtv1.RunStrategyAlways),
+			Template: &virtv1.VirtualMachineInstanceTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{},
+				Spec: virtv1.VirtualMachineInstanceSpec{
+					Domain: virtv1.DomainSpec{
+						Resources: virtv1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								// FIXME: support coreFraction: req = vm.Spec.CPU.Cores * coreFraction
+								corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", vm.Spec.CPU.Cores)),
+								corev1.ResourceMemory: resource.MustParse(vm.Spec.Memory.Size),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", vm.Spec.CPU.Cores)),
+								corev1.ResourceMemory: resource.MustParse(vm.Spec.Memory.Size),
+							},
+						},
+						CPU: &virtv1.CPU{
+							Model: "Nehalem",
+						},
 					},
-					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", vm.Spec.CPU.Cores)),
-						corev1.ResourceMemory: resource.MustParse(vm.Spec.Memory.Size),
-					},
-				},
-				CPU: &virtv1.CPU{
-					Model: "Nehalem",
 				},
 			},
 		},
@@ -171,7 +243,7 @@ func NewVMIFromVirtualMachine(name types.NamespacedName, vm *virtv2.VirtualMachi
 					},
 				},
 			}
-			res.Spec.Domain.Devices.Disks = append(res.Spec.Domain.Devices.Disks, disk)
+			res.Spec.Template.Spec.Domain.Devices.Disks = append(res.Spec.Template.Spec.Domain.Devices.Disks, disk)
 
 			volume := virtv1.Volume{
 				Name: bd.VirtualMachineDisk.Name,
@@ -183,7 +255,7 @@ func NewVMIFromVirtualMachine(name types.NamespacedName, vm *virtv2.VirtualMachi
 					},
 				},
 			}
-			res.Spec.Volumes = append(res.Spec.Volumes, volume)
+			res.Spec.Template.Spec.Volumes = append(res.Spec.Template.Spec.Volumes, volume)
 
 		default:
 			panic(fmt.Sprintf("unknown block device type %q", bd.Type))
@@ -197,6 +269,8 @@ func NewVMIFromVirtualMachine(name types.NamespacedName, vm *virtv2.VirtualMachi
 			Kind:    "VirtualMachine",
 		}),
 	}
+
+	controllerutil.AddFinalizer(res, virtv2.FinalizerKVVMProtection)
 
 	return res
 }
