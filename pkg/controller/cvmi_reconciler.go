@@ -167,10 +167,11 @@ func (r *CVMIReconciler) updateCVMIFromPod(cvmi *virtv2alpha1.ClusterVirtualMach
 
 	isComplete := false
 
-	if cvmiStatus.Phase == "" {
+	switch {
+	case cvmiStatus.Phase == "":
 		cvmiStatus.Phase = string(virtv2alpha1.ImagePending)
 		cvmiStatus.Target.RegistryURL = importer.GetDestinationImageNameFromPod(pod)
-	} else if cc.IsPodComplete(pod) {
+	case cc.IsPodComplete(pod):
 		r.recorder.Event(cvmi, corev1.EventTypeNormal, "ImportSucceeded", "Import Successful")
 		log.V(1).Info("Import completed successfully")
 		anno[cc.AnnImportDone] = "true"
@@ -192,7 +193,7 @@ func (r *CVMIReconciler) updateCVMIFromPod(cvmi *virtv2alpha1.ClusterVirtualMach
 			anno[cc.AnnImportStoredSizeBytes] = strconv.FormatUint(finalReport.StoredSizeBytes, 10)
 			anno[cc.AnnImportUnpackedSizeBytes] = strconv.FormatUint(finalReport.UnpackedSizeBytes, 10)
 		}
-	} else if pod.Status.Phase == corev1.PodRunning {
+	case pod.Status.Phase == corev1.PodRunning:
 		// Copy progress from Pod metrics to cvmi.Status.
 		// TODO Is UID important? Why not just get metric values without checking UID label?
 		log.V(2).Info("Fetch progress", "cvmi.name", cvmi.Name)
