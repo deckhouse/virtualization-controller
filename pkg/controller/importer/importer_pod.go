@@ -282,16 +282,16 @@ func (imp *Importer) makeImporterContainerEnv() []corev1.EnvVar {
 	}...)
 
 	// HTTP source checksum settings: md5 and sha256.
-	if imp.Settings.ChecksumSHA256 != "" {
+	if imp.Settings.SHA256 != "" {
 		env = append(env, corev1.EnvVar{
 			Name:  common.ImporterSHA256Sum,
-			Value: imp.Settings.ChecksumSHA256,
+			Value: imp.Settings.SHA256,
 		})
 	}
-	if imp.Settings.ChecksumMD5 != "" {
+	if imp.Settings.MD5 != "" {
 		env = append(env, corev1.EnvVar{
 			Name:  common.ImporterMD5Sum,
-			Value: imp.Settings.ChecksumMD5,
+			Value: imp.Settings.MD5,
 		})
 	}
 

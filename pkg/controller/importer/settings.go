@@ -10,8 +10,8 @@ import (
 type Settings struct {
 	Verbose                string
 	Endpoint               string
-	ChecksumMD5            string
-	ChecksumSHA256         string
+	MD5                    string
+	SHA256                 string
 	SecretName             string
 	Source                 string
 	ContentType            string
@@ -47,11 +47,11 @@ func UpdateHTTPSettings(podEnvVars *Settings, http *virtv2alpha1.DataSourceHTTP)
 
 	if http.Checksum != nil {
 		if http.Checksum.MD5 != "" {
-			podEnvVars.ChecksumMD5 = http.Checksum.MD5
+			podEnvVars.MD5 = http.Checksum.MD5
 		}
 
 		if http.Checksum.SHA256 != "" {
-			podEnvVars.ChecksumSHA256 = http.Checksum.SHA256
+			podEnvVars.SHA256 = http.Checksum.SHA256
 		}
 	}
 }
